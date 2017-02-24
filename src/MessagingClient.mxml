@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009" 
+					   xmlns:s="library://ns.adobe.com/flex/spark" 
+					   xmlns:mx="library://ns.adobe.com/flex/mx"
+					   >
+	<fx:Script>
+		<![CDATA[
+			import mx.controls.Alert;
+			import mx.messaging.FlexClient;
+			import mx.messaging.events.MessageEvent;
+			import mx.rpc.AsyncToken;
+			import mx.rpc.Responder;
+			import mx.rpc.events.FaultEvent;
+			import mx.rpc.events.ResultEvent;
+			
+			import org.granite.gravity.Consumer;
+			import org.granite.tide.service.ServerSession;
+			import org.granite.tide.service.SimpleServerApp;
+			import org.granite.tide.spring.Spring;
+			import org.graniteds.tutorial.feed.entities.StockPrice;
+			
+			private var feedConsumer:Consumer;
+			
+			// tag::client-setup[]
+			[Inject]
+			public var serverSession:ServerSession;
+			
+			[Bindable]
+			public var loggedIn:Boolean = false;
+			
+			private function init():void {
+				Spring.getInstance().initApplication(); // <1>
+				serverSession.serverApp =
+					new SimpleServerApp("/feed", false, "localhost.", "8080"); // <2>
+				feedConsumer = serverSession.getConsumer("feedTopic", "NASDAQ"); // <3>
+				feedConsumer.subscribe(); // <4>
+				feedConsumer.addEventListener(MessageEvent.MESSAGE, messageHandler); // <1>
+			}
+//			[In]
+//			public var helloWorldService:Component; // <1>
+			
+			private function resetChannelSet():void {
+				testService.channelSet.logout();
+				FlexClient.getInstance().id = null;
+				testService.channelSet.removeChannel(amfChannel);
+				var channel:AMFChannel = new AMFChannel("amfChannel", "http://localhost.:8082/messagebroker/short-polling-amf");
+				channel.connectTimeout = 0;
+				testService.channelSet.addChannel(channel);
+			}
+			
+			private function send():void {
+				testService.echo.addEventListener("result", 
+					function(event:ResultEvent):void { // <3>
+						resultLabel.text = event.result as String;
+						nameInput.text = "";
+					}
+				);
+				testService.echo(nameInput.text);
+			}
+			
+			private function resetSlaveChannelSet():void {
+				testServiceSlave.channelSet.logout();
+				FlexClient.getInstance().id = null;
+				testServiceSlave.channelSet.removeChannel(amfChannelSlave);
+				var channel:AMFChannel = new AMFChannel("amfChannelSlave", "http://localhost.:8083/messagebroker/short-polling-amf");
+				channel.connectTimeout = 0;
+				testServiceSlave.channelSet.addChannel(channel);
+			}
+
+			private function sendToSlave():void {
+				testServiceSlave.echo.addEventListener("result",
+					function(event:ResultEvent):void {
+						slaveResultLabel.text = event.result as String;
+						slaveNameInput.text = "";
+					}
+				);
+				testServiceSlave.echo(slaveNameInput.text);
+			}
+			
+			private function onFault(event:FaultEvent):void
+			{
+				Alert.show(event.fault.faultString)
+			}
+			// end::client-setup[]
+			
+			// tag::client-consume[]
+			
+			private function initService():void {
+				testService.initialize();
+				amfChannel.connect(amfChannelSet);
+					
+			}
+			
+			private function login():void {
+				
+				var responder:mx.rpc.Responder = new mx.rpc.Responder(handleLoginResult, onFault);
+				var token:AsyncToken = testService.channelSet.login(username.text, password.text);
+				token.addResponder(responder);
+			}
+			
+			private function handleLoginResult(event:ResultEvent) {
+				loggedIn = true;
+			}
+			
+			private function messageHandler(event:MessageEvent):void {
+				var stockPrices:Array = event.message.body as Array; // <2>
+				var sp:StockPrice;
+				if (tileGroup.numElements == 0) {
+					for each (sp in stockPrices) {
+						var stockPriceView:StockPriceView = new StockPriceView();
+						stockPriceView.stockName = sp.name;
+						stockPriceView.initialPrice = sp.price;
+						tileGroup.addElement(stockPriceView);
+					}
+				}
+				var idx:int = 0;
+				for each (sp in stockPrices)
+				StockPriceView(tileGroup.getElementAt(idx++)).updatePrice(sp.price);
+			}
+			// end::client-consume[]
+		]]>
+	</fx:Script>
+	<fx:Declarations>
+		<s:RemoteObject id="testService"
+						destination="testService"
+						fault="onFault(event)">
+			<s:method name="echo" />
+			<s:channelSet>
+				<s:ChannelSet id="amfChannelSet">
+					<s:channels>
+						<s:AMFChannel id="amfChannel" uri="http://localhost.:8082/messagebroker/short-polling-amf" connectTimeout="0"/> 
+					</s:channels>
+				</s:ChannelSet>
+			</s:channelSet>
+		</s:RemoteObject>
+		<s:RemoteObject id="testServiceSlave"
+						destination="testService"
+						fault="onFault(event)">
+			<s:method name="echo" />
+			<s:channelSet>
+				<s:ChannelSet id="amfChannelSetSlave">
+					<s:channels>
+						<s:AMFChannel id="amfChannelSlave" uri="http://localhost.:8083/messagebroker/short-polling-amf" connectTimeout="0"/> 
+					</s:channels>
+				</s:ChannelSet>
+			</s:channelSet>
+		</s:RemoteObject>
+	</fx:Declarations>
+	<!-- tag::client-ui[] -->
+	<s:VGroup>
+	<s:Form>
+		<s:FormItem label="Login to Master:">
+			<s:HGroup gap="10">
+				<s:TextInput id="username" text="user"/> <!--1-->
+				<s:TextInput id="password" text="password"/>
+				<s:Button label="Login" click="login()"/> <!--2-->
+			</s:HGroup>
+		</s:FormItem>
+		<s:FormItem label="Enter text to the Master:">
+			<s:HGroup gap="10">
+				<s:TextInput id="nameInput" enter="send()"/> <!--1-->
+				<s:Button label="Send" click="send()"/> <!--2-->
+			</s:HGroup>
+		</s:FormItem>
+		<s:FormItem>
+			<s:Label id="resultLabel"/>
+		</s:FormItem>
+		<s:FormItem label="Enter text to the Slave:">
+			<s:HGroup gap="10">
+				<s:TextInput id="slaveNameInput" enter="sendToSlave()"/> <!--1-->
+				<s:Button label="Send" click="sendToSlave()"/> <!--2-->
+			</s:HGroup>
+		</s:FormItem>
+		<s:FormItem>
+			<s:Label id="slaveResultLabel"/>
+		</s:FormItem>
+	</s:Form>
+	<s:Button label="InitialiseAMFChannel" click="initService()"/>
+	<s:Button label="Reset Master Channel Set" click="resetChannelSet()"/>
+	<s:Button label="Reset Slave Channel Set" click="resetSlaveChannelSet()"/>
+	<s:Button label="Connect Subscription" click="init()" enabled="{loggedIn}"/>
+	<s:VGroup width="100%" height="100%" gap="10" paddingBottom="10" paddingTop="10" paddingLeft="10" paddingRight="10">
+		<s:Label text="Stock Feed Example" fontSize="24" fontFamily="Tahoma" width="100%" height="50" verticalAlign="middle"
+				 backgroundColor="#97b54b" color="white" paddingLeft="5" paddingRight="5" paddingTop="5" paddingBottom="5"/>
+		
+		<s:TileGroup id="tileGroup" orientation="columns" horizontalGap="10" verticalGap="10"
+					 horizontalAlign="center" verticalAlign="middle"/>
+	</s:VGroup>
+	</s:VGroup>
+	<!-- end::client-ui[] -->	
+</s:WindowedApplication>
